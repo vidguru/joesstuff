@@ -1,58 +1,47 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <title>Quest 3 Passthrough Photo Viewer</title>
-  <style>
-    html,body { margin:0; height:100%; font-family:Arial,sans-serif; background:#111; color:#fff; }
-    #panel {
-      position:fixed; z-index:10; left:16px; top:16px; width:min(420px,calc(100vw - 32px));
-      padding:18px; border-radius:16px; background:rgba(15,15,15,.92); box-sizing:border-box;
-    }
-    h1 { font-size:22px; margin:0 0 12px; }
-    p { color:#ccc; line-height:1.4; }
-    label { display:block; margin-top:12px; font-weight:700; }
-    input[type=file], input[type=number], input[type=range], button {
-      width:100%; margin-top:7px; box-sizing:border-box;
-    }
-    input[type=number] { padding:10px; border-radius:9px; border:1px solid #555; background:#222; color:#fff; }
-    input[type=range] { accent-color:white; }
-    button {
-      padding:13px; border:0; border-radius:10px; font-size:16px; font-weight:700;
-      cursor:pointer;
-    }
-    #enterAR { margin-top:16px; }
-    #status { margin-top:10px; color:#aaa; font-size:14px; }
-    #preview { display:none; max-width:180px; max-height:180px; margin-top:12px; border:1px solid #555; background:#333; }
-    .small { font-size:12px; color:#999; }
-    canvas { display:block; }
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Quest 3 Passthrough Photo Viewer v2</title>
+<style>
+html,body{margin:0;height:100%;overflow:hidden;font-family:Arial,sans-serif;background:#111;color:#fff}
+#panel{position:fixed;z-index:20;left:16px;top:16px;width:min(430px,calc(100vw - 32px));padding:18px;border-radius:16px;background:rgba(15,15,15,.94);box-sizing:border-box}
+h1{font-size:21px;margin:0 0 10px}
+p{color:#ccc;line-height:1.35}
+label{display:block;margin-top:12px;font-weight:700}
+input[type=file],input[type=number],input[type=range],button{width:100%;margin-top:7px;box-sizing:border-box}
+input[type=number]{padding:10px;border-radius:9px;border:1px solid #555;background:#222;color:#fff}
+button{padding:13px;border:0;border-radius:10px;font-size:16px;font-weight:700;cursor:pointer}
+#status{margin-top:10px;color:#aaa;font-size:14px}
+#preview{display:none;max-width:160px;max-height:160px;margin-top:10px;border:1px solid #555;background:#333}
+.small{font-size:12px;color:#999}
+canvas{display:block}
+</style>
 </head>
 <body>
 <div id="panel">
-  <h1>Quest 3 Passthrough Photo Viewer</h1>
-  <p>Choose a transparent PNG, set the person's approximate real-world height, then enter passthrough.</p>
+  <h1>Quest 3 Passthrough Photo Viewer v2</h1>
+  <p>This version places the image only after the XR session has started.</p>
 
   <label>Transparent PNG</label>
-  <input id="file" type="file" accept="image/png,image/webp" />
-  <img id="preview" alt="preview"/>
+  <input id="file" type="file" accept="image/png,image/webp">
+  <img id="preview" alt="preview">
 
-  <label>Life-size height (feet)</label>
-  <input id="heightFt" type="number" min="1" max="8" step="0.1" value="5.5" />
+  <label>Real-world height (feet)</label>
+  <input id="heightFt" type="number" min="1" max="8" step="0.1" value="5.5">
 
-  <label>Starting distance: <span id="distanceLabel">2.0</span> m</label>
-  <input id="distance" type="range" min="0.7" max="5" step="0.1" value="2.0" />
+  <label>Distance: <span id="distanceLabel">2.0</span> m</label>
+  <input id="distance" type="range" min="0.7" max="5" step="0.1" value="2.0">
 
   <button id="enterAR" disabled>Enter Passthrough</button>
-  <div id="status">Checking Quest/WebXR support…</div>
-  <p class="small">The selected photo is read directly by your browser. This page does not upload it anywhere.</p>
+  <div id="status">Checking WebXR…</div>
+  <p class="small">Your selected image stays local in the browser.</p>
 </div>
 
 <script type="module">
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js';
 
-const panel = document.getElementById('panel');
 const fileInput = document.getElementById('file');
 const preview = document.getElementById('preview');
 const heightFt = document.getElementById('heightFt');
@@ -60,136 +49,179 @@ const distance = document.getElementById('distance');
 const distanceLabel = document.getElementById('distanceLabel');
 const enterAR = document.getElementById('enterAR');
 const status = document.getElementById('status');
+const panel = document.getElementById('panel');
 
-distance.addEventListener('input', () => distanceLabel.textContent = Number(distance.value).toFixed(1));
-
-let renderer, scene, camera, photoMesh, texture, imgAspect = 1;
-let localImageURL = null;
+let renderer, scene, camera, photoMesh, texture;
+let imgAspect = 1;
 let xrSupported = false;
+let localImageURL = null;
+let needsXRPlacement = false;
 
-function initThree() {
-  scene = new THREE.Scene();
-  // IMPORTANT: transparent background allows Quest passthrough to show through.
-  scene.background = null;
+distance.addEventListener('input',()=>distanceLabel.textContent=Number(distance.value).toFixed(1));
 
-  camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.01, 100);
-  camera.position.set(0, 1.6, 0);
+scene = new THREE.Scene();
+scene.background = null;
 
-  renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-  renderer.setSize(innerWidth, innerHeight);
-  renderer.xr.enabled = true;
-  renderer.setClearColor(0x000000, 0);
-  document.body.appendChild(renderer.domElement);
+camera = new THREE.PerspectiveCamera(70, innerWidth/innerHeight, 0.01, 100);
 
-  const geo = new THREE.PlaneGeometry(1, 1);
-  const mat = new THREE.MeshBasicMaterial({
-    transparent:true,
-    alphaTest:0.02,
-    side:THREE.DoubleSide,
-    depthWrite:true
-  });
-  photoMesh = new THREE.Mesh(geo, mat);
-  photoMesh.visible = false;
-  scene.add(photoMesh);
+renderer = new THREE.WebGLRenderer({
+  antialias:true,
+  alpha:true,
+  preserveDrawingBuffer:false
+});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.setSize(innerWidth,innerHeight);
+renderer.setClearColor(0x000000,0);
+renderer.xr.enabled = true;
+renderer.xr.setReferenceSpaceType('local');
+document.body.appendChild(renderer.domElement);
 
-  renderer.setAnimationLoop(() => renderer.render(scene, camera));
+const material = new THREE.MeshBasicMaterial({
+  transparent:true,
+  alphaTest:0.01,
+  side:THREE.DoubleSide,
+  depthTest:true,
+  depthWrite:false
+});
 
-  addEventListener('resize', () => {
-    camera.aspect = innerWidth / innerHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize(innerWidth, innerHeight);
-  });
+photoMesh = new THREE.Mesh(new THREE.PlaneGeometry(1,1),material);
+photoMesh.visible = false;
+scene.add(photoMesh);
+
+function applySize(){
+  if(!texture) return;
+  const h = Number(heightFt.value)*0.3048;
+  const w = h*imgAspect;
+  photoMesh.scale.set(w,h,1);
 }
+heightFt.addEventListener('input',applySize);
 
-function updatePhotoSizeAndPosition() {
-  if (!photoMesh || !texture) return;
+fileInput.addEventListener('change',()=>{
+  const f=fileInput.files?.[0];
+  if(!f)return;
 
-  const metersTall = Number(heightFt.value) * 0.3048;
-  const metersWide = metersTall * imgAspect;
-  photoMesh.scale.set(metersWide, metersTall, 1);
+  if(localImageURL) URL.revokeObjectURL(localImageURL);
+  localImageURL=URL.createObjectURL(f);
 
-  const d = Number(distance.value);
+  preview.src=localImageURL;
+  preview.style.display='block';
 
-  // Place the bottom of the image near floor level, assuming head height ~1.6m.
-  // In local-floor reference space, Y=0 is the floor.
-  photoMesh.position.set(0, metersTall / 2, -d);
-  photoMesh.rotation.set(0, 0, 0);
-}
+  const img=new Image();
+  img.onload=()=>{
+    imgAspect=img.naturalWidth/img.naturalHeight;
 
-fileInput.addEventListener('change', async () => {
-  const file = fileInput.files?.[0];
-  if (!file) return;
+    new THREE.TextureLoader().load(localImageURL,(tex)=>{
+      if(texture)texture.dispose();
+      texture=tex;
+      texture.colorSpace=THREE.SRGBColorSpace;
+      texture.needsUpdate=true;
 
-  if (localImageURL) URL.revokeObjectURL(localImageURL);
-  localImageURL = URL.createObjectURL(file);
-
-  preview.src = localImageURL;
-  preview.style.display = 'block';
-
-  const img = new Image();
-  img.onload = () => {
-    imgAspect = img.naturalWidth / img.naturalHeight;
-
-    new THREE.TextureLoader().load(localImageURL, tex => {
-      if (texture) texture.dispose();
-      texture = tex;
-      texture.colorSpace = THREE.SRGBColorSpace;
-      photoMesh.material.map = texture;
-      photoMesh.material.needsUpdate = true;
-      photoMesh.visible = true;
-      updatePhotoSizeAndPosition();
+      photoMesh.material.map=texture;
+      photoMesh.material.needsUpdate=true;
+      applySize();
+      photoMesh.visible=true;
       refreshButton();
+
+      status.textContent = xrSupported
+        ? 'Image ready. Enter passthrough.'
+        : 'Image ready, but immersive AR was not detected.';
     });
   };
-  img.src = localImageURL;
+  img.src=localImageURL;
 });
 
-heightFt.addEventListener('input', updatePhotoSizeAndPosition);
-distance.addEventListener('input', updatePhotoSizeAndPosition);
-
-function refreshButton() {
-  enterAR.disabled = !(xrSupported && texture);
+function refreshButton(){
+  enterAR.disabled=!(xrSupported && texture);
 }
 
-async function checkXR() {
-  if (!navigator.xr) {
-    status.textContent = 'WebXR is not available in this browser. Open this page in the Meta Quest Browser.';
+async function checkXR(){
+  if(!navigator.xr){
+    status.textContent='WebXR unavailable. Open this page in Meta Quest Browser.';
     return;
   }
-  try {
-    xrSupported = await navigator.xr.isSessionSupported('immersive-ar');
-    status.textContent = xrSupported
-      ? 'Quest passthrough/WebXR detected. Choose a PNG.'
-      : 'This browser does not report immersive AR support.';
+  try{
+    xrSupported=await navigator.xr.isSessionSupported('immersive-ar');
+    status.textContent=xrSupported
+      ? 'Quest immersive AR detected. Choose a PNG.'
+      : 'Immersive AR not reported by this browser.';
     refreshButton();
-  } catch (e) {
-    status.textContent = 'Could not check immersive AR support: ' + e.message;
+  }catch(e){
+    status.textContent='WebXR check failed: '+e.message;
   }
 }
 
-enterAR.addEventListener('click', async () => {
-  try {
-    updatePhotoSizeAndPosition();
+function placeInFrontOfHeadset(){
+  // Get the actual XR camera AFTER the session begins.
+  const xrCamera=renderer.xr.getCamera(camera);
 
-    const session = await navigator.xr.requestSession('immersive-ar', {
-      requiredFeatures: ['local-floor'],
-      optionalFeatures: ['hand-tracking']
+  const worldPos=new THREE.Vector3();
+  const worldQuat=new THREE.Quaternion();
+  xrCamera.getWorldPosition(worldPos);
+  xrCamera.getWorldQuaternion(worldQuat);
+
+  // Forward direction from the headset.
+  const forward=new THREE.Vector3(0,0,-1).applyQuaternion(worldQuat);
+  // Keep image upright rather than matching head tilt.
+  forward.y=0;
+  if(forward.lengthSq()<0.0001) forward.set(0,0,-1);
+  forward.normalize();
+
+  const d=Number(distance.value);
+
+  // Place center slightly below eye height so a life-size person extends toward the floor.
+  const h=Number(heightFt.value)*0.3048;
+  const center=worldPos.clone().add(forward.multiplyScalar(d));
+  center.y = worldPos.y - Math.max(0, h/2 - 0.80);
+
+  photoMesh.position.copy(center);
+
+  // Face the user, yaw only.
+  const target=new THREE.Vector3(worldPos.x, center.y, worldPos.z);
+  photoMesh.lookAt(target);
+
+  photoMesh.visible=true;
+}
+
+renderer.setAnimationLoop(()=>{
+  if(renderer.xr.isPresenting && needsXRPlacement){
+    // Waiting until this point is the important v2 change:
+    // Quest has supplied a real XR camera pose.
+    placeInFrontOfHeadset();
+    needsXRPlacement=false;
+  }
+  renderer.render(scene,camera);
+});
+
+enterAR.addEventListener('click',async()=>{
+  try{
+    applySize();
+
+    const session=await navigator.xr.requestSession('immersive-ar',{
+      requiredFeatures:['local'],
+      optionalFeatures:['hand-tracking']
     });
 
-    renderer.xr.setReferenceSpaceType('local-floor');
     await renderer.xr.setSession(session);
-    panel.style.display = 'none';
+    needsXRPlacement=true;
+    panel.style.display='none';
 
-    session.addEventListener('end', () => {
-      panel.style.display = 'block';
+    session.addEventListener('end',()=>{
+      panel.style.display='block';
+      status.textContent='Passthrough ended. You can enter again.';
     });
-  } catch (e) {
-    status.textContent = 'Could not start passthrough: ' + e.message;
+
+  }catch(e){
+    panel.style.display='block';
+    status.textContent='Could not start passthrough: '+e.message;
   }
 });
 
-initThree();
+addEventListener('resize',()=>{
+  camera.aspect=innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth,innerHeight);
+});
+
 checkXR();
 </script>
 </body>
