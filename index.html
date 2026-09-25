@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Quest 3 Passthrough Photo Viewer v3</title>
+<title>Quest 3 Passthrough Photo Viewer v4</title>
 <style>
 html,body{margin:0;height:100%;overflow:hidden;font-family:Arial,sans-serif;background:#111;color:#fff}
 #panel{position:fixed;z-index:20;left:16px;top:16px;width:min(430px,calc(100vw - 32px));padding:18px;border-radius:16px;background:rgba(15,15,15,.94);box-sizing:border-box}
@@ -21,8 +21,8 @@ canvas{display:block}
 </head>
 <body>
 <div id="panel">
-  <h1>Quest 3 Passthrough Photo Viewer v3</h1>
-  <p>Diagnostic build: image + test cube stay directly in front of the headset.</p>
+  <h1>Quest 3 Passthrough Photo Viewer v4</h1>
+  <p>Camera-locked diagnostic build.</p>
 
   <label>Transparent PNG</label>
   <input id="file" type="file" accept="image/png,image/webp">
@@ -36,7 +36,7 @@ canvas{display:block}
 
   <button id="enterAR" disabled>Enter Passthrough</button>
   <div id="status">Checking WebXR…</div>
-  <p class="small">If this works, you'll see the PNG and a spinning cube beside it.</p>
+  <p class="small">The image and cube are attached to the XR viewer for this test.</p>
 </div>
 
 <script type="module">
@@ -51,23 +51,30 @@ const enterAR=document.getElementById('enterAR');
 const status=document.getElementById('status');
 const panel=document.getElementById('panel');
 
-let renderer,scene,camera,photoMesh,testCube,texture;
-let imgAspect=1,xrSupported=false,localImageURL=null;
+let texture=null;
+let imgAspect=1;
+let xrSupported=false;
+let localImageURL=null;
 
-distance.addEventListener('input',()=>distanceLabel.textContent=Number(distance.value).toFixed(1));
-
-scene=new THREE.Scene();
+const scene=new THREE.Scene();
 scene.background=null;
 
-camera=new THREE.PerspectiveCamera(70,innerWidth/innerHeight,0.01,100);
+const camera=new THREE.PerspectiveCamera(70,innerWidth/innerHeight,0.01,100);
+// Camera must be in the scene so its children are traversed/rendered.
+scene.add(camera);
 
-renderer=new THREE.WebGLRenderer({antialias:true,alpha:true});
+const renderer=new THREE.WebGLRenderer({antialias:true,alpha:true});
 renderer.setPixelRatio(Math.min(devicePixelRatio,2));
 renderer.setSize(innerWidth,innerHeight);
 renderer.setClearColor(0x000000,0);
+renderer.setClearAlpha(0);
 renderer.xr.enabled=true;
 renderer.xr.setReferenceSpaceType('local');
 document.body.appendChild(renderer.domElement);
+
+// Everything in this group is camera-relative.
+const hudGroup=new THREE.Group();
+camera.add(hudGroup);
 
 const photoMat=new THREE.MeshBasicMaterial({
   transparent:true,
@@ -76,46 +83,61 @@ const photoMat=new THREE.MeshBasicMaterial({
   depthTest:false,
   depthWrite:false
 });
-photoMesh=new THREE.Mesh(new THREE.PlaneGeometry(1,1),photoMat);
+const photoMesh=new THREE.Mesh(new THREE.PlaneGeometry(1,1),photoMat);
 photoMesh.visible=false;
-photoMesh.renderOrder=10;
-scene.add(photoMesh);
+hudGroup.add(photoMesh);
 
-// Deliberately obvious diagnostic object.
-const cubeMat=new THREE.MeshNormalMaterial();
-testCube=new THREE.Mesh(new THREE.BoxGeometry(0.25,0.25,0.25),cubeMat);
-testCube.visible=false;
-testCube.renderOrder=11;
-scene.add(testCube);
+const cube=new THREE.Mesh(
+  new THREE.BoxGeometry(0.22,0.22,0.22),
+  new THREE.MeshNormalMaterial({depthTest:false})
+);
+cube.visible=false;
+hudGroup.add(cube);
 
-function applySize(){
-  if(!texture)return;
-  const h=Number(heightFt.value)*0.3048;
-  const w=h*imgAspect;
-  photoMesh.scale.set(w,h,1);
+function updateLayout(){
+  const d=Number(distance.value);
+  distanceLabel.textContent=d.toFixed(1);
+
+  if(texture){
+    const h=Number(heightFt.value)*0.3048;
+    const w=h*imgAspect;
+    photoMesh.scale.set(w,h,1);
+  }
+
+  // Coordinates are relative to the viewer:
+  // forward is negative Z.
+  photoMesh.position.set(-0.20,-0.15,-d);
+  photoMesh.rotation.set(0,0,0);
+
+  cube.position.set(0.65,0,-Math.max(0.75,d-0.1));
 }
-heightFt.addEventListener('input',applySize);
+distance.addEventListener('input',updateLayout);
+heightFt.addEventListener('input',updateLayout);
 
 fileInput.addEventListener('change',()=>{
   const f=fileInput.files?.[0];
   if(!f)return;
+
   if(localImageURL)URL.revokeObjectURL(localImageURL);
   localImageURL=URL.createObjectURL(f);
-
   preview.src=localImageURL;
   preview.style.display='block';
 
   const img=new Image();
   img.onload=()=>{
     imgAspect=img.naturalWidth/img.naturalHeight;
+
     new THREE.TextureLoader().load(localImageURL,(tex)=>{
       if(texture)texture.dispose();
       texture=tex;
       texture.colorSpace=THREE.SRGBColorSpace;
+      texture.needsUpdate=true;
+
       photoMesh.material.map=texture;
       photoMesh.material.needsUpdate=true;
       photoMesh.visible=true;
-      applySize();
+
+      updateLayout();
       refreshButton();
       status.textContent=xrSupported?'Image ready. Enter passthrough.':'Image ready; AR not detected.';
     });
@@ -123,7 +145,9 @@ fileInput.addEventListener('change',()=>{
   img.src=localImageURL;
 });
 
-function refreshButton(){ enterAR.disabled=!(xrSupported&&texture); }
+function refreshButton(){
+  enterAR.disabled=!(xrSupported&&texture);
+}
 
 async function checkXR(){
   if(!navigator.xr){
@@ -139,56 +163,31 @@ async function checkXR(){
   }
 }
 
-renderer.setAnimationLoop((t)=>{
+renderer.setAnimationLoop(()=>{
   if(renderer.xr.isPresenting){
-    const xrCamera=renderer.xr.getCamera(camera);
-    const pos=new THREE.Vector3();
-    const quat=new THREE.Quaternion();
-
-    xrCamera.getWorldPosition(pos);
-    xrCamera.getWorldQuaternion(quat);
-
-    const d=Number(distance.value);
-
-    // Head-forward vector.
-    const forward=new THREE.Vector3(0,0,-1).applyQuaternion(quat).normalize();
-    const right=new THREE.Vector3(1,0,0).applyQuaternion(quat).normalize();
-    const down=new THREE.Vector3(0,-0.15,0);
-
-    // Keep the photo continuously in front of the headset.
-    const photoPos=pos.clone()
-      .add(forward.clone().multiplyScalar(d))
-      .add(down);
-
-    photoMesh.position.copy(photoPos);
-    photoMesh.quaternion.copy(quat);  // head-facing for this diagnostic build
-    photoMesh.visible=!!texture;
-
-    // Put a cube slightly to the user's right and closer.
-    const cubePos=pos.clone()
-      .add(forward.clone().multiplyScalar(Math.max(0.8,d-0.15)))
-      .add(right.multiplyScalar(0.55));
-
-    testCube.position.copy(cubePos);
-    testCube.rotation.x += 0.015;
-    testCube.rotation.y += 0.025;
-    testCube.visible=true;
+    cube.visible=true;
+    cube.rotation.x+=0.015;
+    cube.rotation.y+=0.025;
   }
-
   renderer.render(scene,camera);
 });
 
 enterAR.addEventListener('click',async()=>{
   try{
+    updateLayout();
+
     const session=await navigator.xr.requestSession('immersive-ar',{
       optionalFeatures:['local-floor','hand-tracking']
     });
+
     await renderer.xr.setSession(session);
+    photoMesh.visible=true;
+    cube.visible=true;
     panel.style.display='none';
 
     session.addEventListener('end',()=>{
       panel.style.display='block';
-      testCube.visible=false;
+      cube.visible=false;
       status.textContent='Passthrough ended.';
     });
   }catch(e){
@@ -203,6 +202,7 @@ addEventListener('resize',()=>{
   renderer.setSize(innerWidth,innerHeight);
 });
 
+updateLayout();
 checkXR();
 </script>
 </body>
